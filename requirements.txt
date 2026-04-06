@@ -35,3 +35,29 @@ numpy>=1.26.0               # Array ops for embedding manipulation
 #   1. Install Ollama: https://ollama.ai
 #   2. Run: ollama pull nomic-embed-text
 #   No API key needed — runs entirely on your machine.
+python-frontmatter>=1.1.0
+mistune>=3.0.2
+sqlite-vec>=0.1.6
+openai>=1.30.0
+tiktoken>=0.7.0
+click>=8.1.7
+python-dotenv>=1.0.1
+tqdm>=4.66.4
+# LLM-Brains requirements
+anthropic>=0.40.0
+openai>=1.50.0
+python-frontmatter>=1.1.0
+pymupdf>=1.24.0
+faster-whisper>=1.0.0
+yt-dlp>=2024.10.0
+youtube-transcript-api>=0.6.0
+sqlite-vec>=0.1.0
+numpy>=1.26.0
+requests>=2.31.0
+feedparser>=6.0.11
+Pillow>=10.0.0
+watchdog>=4.0.0
+# marp-cli: install separately with npm install -g @marp-team/marp-cli
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+scipy>=1.11.0
