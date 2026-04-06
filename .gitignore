@@ -1,0 +1,11 @@
+vault_memory.db
+*.db
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+.venv/
+venv/
+env/
