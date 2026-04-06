@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+brain/compile.log
+brain/.processed_hashes
+brain/memory.db
+brain/wiki.db
+brain/rss_state.json
+*.db
+*.log
+.env
