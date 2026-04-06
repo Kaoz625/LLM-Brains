@@ -182,11 +182,6 @@ def hybrid_search(
     # ------------------------------------------------------------------
     # Phase 3: RRF fusion
     # ------------------------------------------------------------------
-    # Scale each list before fusion
-    fts_note_scaled = fts_note_ids if fts_weight == 1.0 else [
-        nid for nid in fts_note_ids for _ in range(max(1, int(fts_weight)))
-    ]
-
     merged_note_ids = _merge_rrf(
         fts_note_ids[:fetch_n],
         vec_note_ids[:fetch_n],
