@@ -1,3 +1,33 @@
+# Brain data — contains personal information
+brain/me/
+brain/work/
+brain/media/
+brain/flagged/
+brain/knowledge/
+brain/raw/processed/
+brain/.processed_hashes
+brain/.rss_seen
+brain/compile.log
+brain/rss_ingest.log
+
+# Keep the scaffolding but not personal data
+!brain/raw/README.md
+!brain/index.md
+
+# Database
+brain.db
+*.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# macOS
+.DS_Store
 vault_memory.db
 *.db
 __pycache__/
