@@ -449,7 +449,139 @@ That's what this project is building.
 
 ---
 
-## 12. Key References & Prior Art
+## 12. Pathway Repair: The Neurological Breakthrough
+
+This is the insight that elevates this project from "useful tool" to potential
+breakthrough in AI memory research.
+
+### The Neuroscience
+
+In most memory disorders — trauma, stroke, early Alzheimer's, concussion — the
+**data is not erased**. The neurons that hold the memory are often intact. What's
+broken are the **synaptic pathways** that lead to those neurons. The memory
+can't be recalled because the brain can't find the route to it.
+
+Physical and cognitive therapy for memory disorders works by building
+**alternate pathways** — new connections that route around the damage to reach
+the same stored information. The memory gets recalled via a different direction
+than the original.
+
+### What This System Does
+
+Every `[[wikilink]]` in a compiled note is a new synaptic connection — a retrieval pathway.
+
+When the brain compiler processes an experience and writes:
+
+```markdown
+At the Marine Corps event with [[uncle]], we discussed [[AI-memory]] 
+and [[RAG]] limitations. Location: [[Brooklyn]]. April 2026.
+#family #AI #memory #conversation
+```
+
+That single memory now has **8 distinct retrieval pathways**:
+- Search `uncle` → finds it
+- Search `AI-memory` → finds it
+- Search `RAG` → finds it
+- Search `Brooklyn` → finds it
+- Search `April 2026` → finds it
+- Search `family` tag → finds it
+- Vector search "memory architecture conversation" → finds it
+- FTS5 "Marine Corps" keyword → finds it
+
+If any 7 of those pathways are damaged/forgotten, the 8th still gets there.
+
+### Filling In the Blanks
+
+The system can go further than just multiple access routes — it can
+**reconstruct partially missing memories** the same way the brain does:
+
+```
+"I remember being somewhere with my uncle in early 2026, talking about AI.
+ I can't remember where or what exactly was said."
+```
+
+The system can reconstruct:
+1. Pull all timeline entries containing `[[uncle]]` near `2026`
+2. Pull location data from GPS or photo metadata for that time period
+3. Pull calendar events from that period
+4. Pull any media saved around that date
+5. Cross-reference with knowledge entries modified around that date
+
+Result: a reconstructed memory that **fills the blank** — "You were in Brooklyn,
+at dinner, April 6, 2026. The conversation was about Karpathy's wiki compiler
+and how it relates to RAG. You mentioned building this exact system."
+
+This is not hallucination. This is **evidence-based reconstruction** from
+cross-linked real data — the same process the human hippocampus performs.
+
+### The Bigger Implication
+
+If this can fill blanks in YOUR memory, it can fill blanks in an LLM's
+"memory" (its knowledge of you and your world). Every piece of data you
+ingest makes the reconstruction more accurate. The system gets better at
+knowing what it doesn't know — and finding it anyway.
+
+**This is the computational implementation of neuroplasticity.**
+
+---
+
+## 13. Complete Data Source Map
+
+Everything that can be ingested into the brain, organized by data type:
+
+```
+PERSONAL LIFE                          KNOWLEDGE & MEDIA
+─────────────────────────────          ──────────────────────────────────
+Photos (.jpg/.png/.heic/.webp)         YouTube / web video (yt-dlp)
+Video (phone, dashcam, wearable)       Podcasts (.mp3 download)
+Voice memos (.m4a/.wav)                RSS/Atom feeds (rss_ingest.py)
+iMessage / SMS (chat.db)              PDF research papers (pymupdf)
+Email (.mbox / .eml)                   Web articles (URL fetch)
+Calendar (.ics events)                 GitHub repos (README + code)
+Contacts (.vcf vCards)                 arXiv papers (RSS)
+Apple Health XML (steps, HR, sleep)    Wikipedia pages (URL)
+GPS tracks (.gpx)                      Obsidian vault (.md files)
+Spotify history (StreamingHistory.json)
+
+DOCUMENTS & WORK                       DIGITAL FOOTPRINT
+─────────────────────────────          ──────────────────────────────────
+Word docs (.docx)                      Browser history (Chrome/Firefox/Safari)
+Excel (.xlsx)                          Twitter/X archive (tweets.js)
+PowerPoint (.pptx)                     Instagram export
+Ebooks (.epub)                         Reddit saved posts
+Code files (.py/.js/.swift/etc.)       Google Takeout (location, activity)
+Markdown notes (.md)                   App usage data
+CSV data                               Screen time reports
+Plain text (.txt)
+```
+
+### Why More Data = More Intelligence (Not Just More Storage)
+
+Each data type creates a different KIND of retrieval pathway:
+
+| Data Type | Pathway Type | Example Query It Enables |
+|-----------|-------------|--------------------------|
+| Photos | Visual/emotional | "When was I happy last month?" |
+| GPS tracks | Spatial | "What was I doing near downtown that week?" |
+| Health data | Physiological | "Was I sleeping badly when productivity dropped?" |
+| Browser history | Attention/interest | "What was I researching before I started this project?" |
+| iMessage | Social/contextual | "What did uncle say about SQLite that one time?" |
+| Spotify | Emotional/temporal | "What was I listening to during the hard period in March?" |
+| Calendar | Temporal/causal | "What happened the day before my mood changed?" |
+| Email | Professional/relationship | "What commitments did I make last quarter?" |
+
+**The cross-correlations between these are where the real intelligence emerges.**
+
+Health data showing poor sleep + calendar showing high-stress period + Spotify
+showing darker music + reduced iMessage activity = the system can identify and
+flag a difficult period you may not have consciously noticed at the time.
+
+That's not just memory. That's **self-knowledge** — the thing that distinguishes
+general intelligence from narrow AI.
+
+---
+
+## 14. Key References & Prior Art
 
 - **Andrej Karpathy** (2026): LLM wiki compiler concept, `github.com/karpathy`
 - **Nous Research Hermes** (2026): Agent reasoning framework, `github.com/nousresearch/hermes-agent`
