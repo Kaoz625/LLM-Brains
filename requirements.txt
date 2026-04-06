@@ -1,3 +1,40 @@
+# LLM-Brains — Python Dependencies
+# Install with: pip install -r requirements.txt
+#
+# Core (required)
+anthropic>=0.40.0          # Claude API — LLM compiler, vision, intuition
+python-frontmatter>=1.1.0  # Markdown YAML frontmatter parsing
+feedparser>=6.0.0           # RSS/Atom feed parsing
+
+# Media processing
+faster-whisper>=1.0.0      # Audio/video transcription (local, fast)
+pymupdf>=1.24.0             # PDF text extraction (fitz)
+youtube-transcript-api>=0.6.0  # YouTube caption extraction
+yt-dlp>=2024.1.0            # YouTube audio download (whisper fallback)
+
+# Vector/semantic search
+sqlite-vec>=0.1.0           # Vector search extension for SQLite
+openai>=1.0.0               # OpenAI embeddings (alternative to Ollama)
+
+# Document parsing (life_data_ingest.py)
+python-docx>=1.1.0          # .docx Word documents
+openpyxl>=3.1.0             # .xlsx Excel spreadsheets
+python-pptx>=0.6.23         # .pptx PowerPoint files
+ebooklib>=0.18              # .epub ebooks
+
+# Optional enhancements
+pyyaml>=6.0                 # Better YAML frontmatter parsing
+pillow>=10.0.0              # Image processing utilities
+numpy>=1.26.0               # Array ops for embedding manipulation
+
+# Note: ffmpeg must be installed separately
+#   macOS: brew install ffmpeg
+#   Linux: apt install ffmpeg
+#
+# Note: For local (free, private) embeddings instead of OpenAI:
+#   1. Install Ollama: https://ollama.ai
+#   2. Run: ollama pull nomic-embed-text
+#   No API key needed — runs entirely on your machine.
 python-frontmatter>=1.1.0
 mistune>=3.0.2
 sqlite-vec>=0.1.6
