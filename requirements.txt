@@ -1,0 +1,8 @@
+python-frontmatter>=1.1.0
+mistune>=3.0.2
+sqlite-vec>=0.1.6
+openai>=1.30.0
+tiktoken>=0.7.0
+click>=8.1.7
+python-dotenv>=1.0.1
+tqdm>=4.66.4
