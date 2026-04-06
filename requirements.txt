@@ -1,0 +1,18 @@
+# LLM-Brains requirements
+anthropic>=0.40.0
+openai>=1.50.0
+python-frontmatter>=1.1.0
+pymupdf>=1.24.0
+faster-whisper>=1.0.0
+yt-dlp>=2024.10.0
+youtube-transcript-api>=0.6.0
+sqlite-vec>=0.1.0
+numpy>=1.26.0
+requests>=2.31.0
+feedparser>=6.0.11
+Pillow>=10.0.0
+watchdog>=4.0.0
+# marp-cli: install separately with npm install -g @marp-team/marp-cli
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+scipy>=1.11.0
