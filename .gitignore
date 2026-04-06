@@ -1,10 +1,38 @@
-__pycache__/
-*.pyc
-brain/compile.log
+# Brain data — contains personal information
+brain/me/
+brain/work/
+brain/media/
+brain/flagged/
+brain/knowledge/
+brain/raw/processed/
 brain/.processed_hashes
-brain/memory.db
-brain/wiki.db
-brain/rss_state.json
+brain/.rss_seen
+brain/compile.log
+brain/rss_ingest.log
+
+# Keep scaffolding
+!brain/raw/.gitkeep
+!brain/index.md
+
+# Databases and logs
 *.db
 *.log
+brain/rss_state.json
+vault_memory.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment
 .env
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
