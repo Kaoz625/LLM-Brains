@@ -1,5 +1,5 @@
 # Brain Index
-> Auto-maintained by compile.py. Do not edit manually.
+> Master catalog of all wiki pages. Auto-maintained on every ingest.
 
 Last compiled: —
 
