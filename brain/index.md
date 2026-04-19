@@ -50,6 +50,7 @@ Welcome to your personal second brain. This index tracks all compiled entries.
 ## Recent Entries
 
 <!-- Entries will be appended here by compile.py -->
+- [[knowledge/wiki/claude-mythos-preview]] — Anthropic's frontier cybersecurity model (2026-04-07)
 
 ## Fragment Domains
 - [[geography]] [[people]] [[science]] [[technology]] [[history]]

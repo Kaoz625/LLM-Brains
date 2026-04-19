@@ -1,218 +1,5 @@
 #!/usr/bin/env python3
 """
-compile.py — LLM Brain Compiler
-Drop anything into brain/raw/ and this script:
-  1. Detects file type (photo, audio, video, PDF, text, URL)
-  2. Extracts content (vision / Whisper / text extraction)
-  3. Uses an LLM to route, compile, and merge into your brain/ structure
-  4. Deduplicates via hash + semantic similarity
-  5. Cross-links concepts using [[wikilink]] syntax
-  6. Updates brain/index.md master map
-
-Usage:
-    python compile.py            # one-shot: process everything in raw/
-    python compile.py --watch    # continuous: watch raw/ for new files
-    python compile.py --rebuild  # recompile everything from scratch
-"""
-
-import os
-import sys
-import json
-import time
-import hashlib
-import logging
-import argparse
-import shutil
-from pathlib import Path
-from datetime import datetime
-from typing import Optional
-
-# ---------------------------------------------------------------------------
-# Optional / lazy imports — only error if the relevant path is actually used
-# ---------------------------------------------------------------------------
-try:
-    import anthropic
-    HAS_ANTHROPIC = True
-except ImportError:
-    HAS_ANTHROPIC = False
-
-try:
-    import frontmatter
-    HAS_FRONTMATTER = True
-except ImportError:
-    HAS_FRONTMATTER = False
-
-# ---------------------------------------------------------------------------
-# Directory layout
-# ---------------------------------------------------------------------------
-
-ROOT       = Path(__file__).parent / "brain"
-RAW        = ROOT / "raw"
-PROCESSED  = RAW / "processed"
-ME         = ROOT / "me"
-WORK       = ROOT / "work"
-KNOWLEDGE  = ROOT / "knowledge" / "concepts"
-MEDIA      = ROOT / "media" / "transcripts"
-INDEX      = ROOT / "index.md"
-LOG_FILE   = ROOT / "compile.log"
-HASH_DB    = ROOT / ".processed_hashes"
-
-# Intuition flags land here
-FLAGGED    = ROOT / "flagged"
-
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s  %(levelname)-8s  %(message)s",
-    handlers=[
-        logging.FileHandler(LOG_FILE),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
-log = logging.getLogger("compile")
-
-# ---------------------------------------------------------------------------
-# Ensure directory structure exists
-# ---------------------------------------------------------------------------
-
-def ensure_dirs():
-    for d in [RAW, PROCESSED, ME, WORK, KNOWLEDGE, MEDIA, FLAGGED,
-              ROOT / "work" / "projects"]:
-        d.mkdir(parents=True, exist_ok=True)
-    if not INDEX.exists():
-        INDEX.write_text("# Brain Index\n\nAuto-maintained by compile.py\n\n")
-    if not HASH_DB.exists():
-        HASH_DB.write_text("{}")
-
-# ---------------------------------------------------------------------------
-# Hash-based dedup
-# ---------------------------------------------------------------------------
-
-def load_hashes() -> dict:
-    try:
-        return json.loads(HASH_DB.read_text())
-    except Exception:
-        return {}
-
-def save_hashes(h: dict):
-    HASH_DB.write_text(json.dumps(h, indent=2))
-
-def file_hash(path: Path) -> str:
-    sha = hashlib.sha256()
-    sha.update(path.read_bytes())
-    return sha.hexdigest()
-
-def already_processed(path: Path, hashes: dict) -> bool:
-    h = file_hash(path)
-    return hashes.get(str(path.name)) == h
-
-def mark_processed(path: Path, hashes: dict):
-    hashes[str(path.name)] = file_hash(path)
-    save_hashes(hashes)
-
-# ---------------------------------------------------------------------------
-# Content extraction by file type
-# ---------------------------------------------------------------------------
-
-def extract_text_from_file(path: Path) -> Optional[str]:
-    """Return raw text content from any supported file type."""
-    suffix = path.suffix.lower()
-
-    # --- Plain text / markdown ---
-    if suffix in {".txt", ".md", ".rst", ".csv", ".json"}:
-        return path.read_text(errors="replace")
-
-    # --- PDF ---
-    if suffix == ".pdf":
-        try:
-            import pymupdf  # pip install pymupdf
-            doc = pymupdf.open(str(path))
-            return "\n".join(page.get_text() for page in doc)
-        except ImportError:
-            log.warning("pymupdf not installed — skipping PDF %s", path.name)
-            return None
-        except Exception as e:
-            log.error("PDF extraction failed for %s: %s", path.name, e)
-            return None
-
-    # --- Audio (mp3, wav, m4a, ogg) ---
-    if suffix in {".mp3", ".wav", ".m4a", ".ogg", ".flac"}:
-        return transcribe_audio(path)
-
-    # --- Video (mp4, mov, mkv) ---
-    if suffix in {".mp4", ".mov", ".mkv", ".avi", ".webm"}:
-        audio_path = path.with_suffix(".mp3")
-        try:
-            import subprocess
-            subprocess.run(
-                ["ffmpeg", "-y", "-i", str(path), "-q:a", "0", "-map", "a", str(audio_path)],
-                capture_output=True, check=True
-            )
-            text = transcribe_audio(audio_path)
-            audio_path.unlink(missing_ok=True)
-            return text
-        except FileNotFoundError:
-            log.warning("ffmpeg not found — skipping video %s", path.name)
-            return None
-        except Exception as e:
-            log.error("Video extraction failed for %s: %s", path.name, e)
-            return None
-
-    # --- Image (jpg, png, webp, heic) ---
-    if suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic"}:
-        return describe_image(path)
-
-    # --- URL file (a .url or .txt file containing a URL) ---
-    if suffix == ".url":
-        content = path.read_text().strip()
-        if content.startswith("http"):
-            return fetch_url_content(content)
-
-    log.warning("Unsupported file type: %s", path.suffix)
-    return None
-
-
-def transcribe_audio(path: Path) -> Optional[str]:
-    """Transcribe audio using faster-whisper (local, free)."""
-    try:
-        from faster_whisper import WhisperModel  # pip install faster-whisper
-        model = WhisperModel("base", device="cpu", compute_type="int8")
-        segments, _ = model.transcribe(str(path))
-        return " ".join(seg.text for seg in segments)
-    except ImportError:
-        log.warning("faster-whisper not installed — trying openai-whisper fallback")
-    except Exception as e:
-        log.error("Whisper transcription failed for %s: %s", path.name, e)
-        return None
-
-    try:
-        import whisper  # pip install openai-whisper
-        model = whisper.load_model("base")
-        result = model.transcribe(str(path))
-        return result["text"]
-    except ImportError:
-        log.warning("openai-whisper not installed — skipping audio %s", path.name)
-        return None
-
-
-def describe_image(path: Path) -> Optional[str]:
-    """Use Claude's vision to describe an image."""
-    if not HAS_ANTHROPIC:
-        log.warning("anthropic not installed — skipping image %s", path.name)
-        return None
-    try:
-        import base64
-        client = anthropic.Anthropic()
-        img_b64 = base64.standard_b64encode(path.read_bytes()).decode("utf-8")
-        suffix = path.suffix.lower().lstrip(".")
-        media_type_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg",
-                          "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
-        media_type = media_type_map.get(suffix, "image/jpeg")
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
 compile.py — Main brain compiler.
 Watches brain/raw/ and processes any file dropped there.
 
@@ -235,10 +22,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import anthropic
+try:
+    import anthropic
+    HAS_ANTHROPIC = True
+except ImportError:
+    HAS_ANTHROPIC = False
+
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# LLM backend config: "anthropic" (default) or "ollama"
+LLM_BACKEND = os.getenv("LLM_BACKEND", "anthropic").lower()
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+OLLAMA_VISION_MODEL = os.getenv("OLLAMA_VISION_MODEL", "vision-moondream:latest")
 
 BRAIN_DIR = Path(os.getenv("BRAIN_DIR", "./brain"))
 RAW_DIR = BRAIN_DIR / "raw"
@@ -504,15 +302,37 @@ OUTPUT FORMAT (JSON):
 """
 
 
+def _call_ollama(
+    system: str,
+    user: str,
+    model: Optional[str] = None,
+    base_url: str = OLLAMA_BASE_URL,
+) -> str:
+    """Call Ollama local model. Returns response text."""
+    import urllib.request
+
+    model = model or OLLAMA_MODEL
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": user})
+
+    payload = json.dumps(
+        {"model": model, "messages": messages, "stream": False}
+    ).encode()
+
+    url = f"{base_url.rstrip('/')}/api/chat"
+    req = urllib.request.Request(
+        url, data=payload, headers={"Content-Type": "application/json"}, method="POST"
+    )
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        data = json.loads(resp.read())
+    return data.get("message", {}).get("content", "")
+
+
 def compile_with_llm(raw_text: str, source_path: Path,
                      existing_files: dict) -> Optional[dict]:
-    """Send raw content to Claude for compilation. Returns structured output."""
-    if not HAS_ANTHROPIC:
-        log.error("anthropic SDK not installed. Run: pip install anthropic")
-        return None
-
-    client = anthropic.Anthropic()
-
+    """Send raw content to LLM for compilation. Returns structured output."""
     # Build context: what already exists (titles only, to save tokens)
     existing_summary = "\n".join(
         f"- {path}" for path in list(existing_files.keys())[:50]
@@ -531,13 +351,20 @@ Compile this content into the brain structure. Check existing files for overlap.
 Return valid JSON only."""
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_message}]
-        )
-        raw_json = response.content[0].text.strip()
+        if LLM_BACKEND == "ollama":
+            raw_json = _call_ollama(SYSTEM_PROMPT, user_message).strip()
+        elif HAS_ANTHROPIC:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_message}]
+            )
+            raw_json = response.content[0].text.strip()
+        else:
+            log.error("No LLM backend available. Install anthropic SDK or set LLM_BACKEND=ollama")
+            return None
         # Strip markdown code fences if present
         if raw_json.startswith("```"):
             raw_json = raw_json.split("```")[1]
@@ -718,11 +545,9 @@ def run_intuition_scan():
     Scan recent brain entries for anomalies vs. the user's baseline patterns.
     This is the 'Spidey Sense' layer — surfaces things that feel off or important.
     """
-    if not HAS_ANTHROPIC:
-        log.error("anthropic SDK required for intuition scan")
+    if LLM_BACKEND != "ollama" and not HAS_ANTHROPIC:
+        log.error("No LLM backend available. Install anthropic SDK or set LLM_BACKEND=ollama")
         return
-
-    client = anthropic.Anthropic()
 
     # Read recent files (last 7 days worth of changes)
     recent_files = []
@@ -754,12 +579,16 @@ Return a list of observations. Mark urgent ones with [URGENT]. Be like a trusted
 who reads between the lines."""
 
     try:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        intuition_note = response.content[0].text
+        if LLM_BACKEND == "ollama":
+            intuition_note = _call_ollama("", prompt)
+        else:
+            client = anthropic.Anthropic()
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            intuition_note = response.content[0].text
         scan_path = FLAGGED / f"intuition_scan_{datetime.now().strftime('%Y%m%d')}.md"
         scan_path.write_text(
             f"# Intuition Scan — {datetime.now().strftime('%Y-%m-%d')}\n\n{intuition_note}\n"
@@ -824,19 +653,6 @@ def main():
         print(f"{'='*50}")
         if stats["flagged"] > 0:
             print(f"\n  Check brain/flagged/ for {stats['flagged']} flagged item(s)!")
-                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
-                    {"type": "text", "text": (
-                        "Describe this image in detail. Extract any text visible. "
-                        "Identify people, places, objects, activities, dates, or events. "
-                        "Format as structured notes suitable for a personal knowledge base."
-                    )}
-                ]
-            }]
-        )
-        return response.content[0].text
-    except Exception as e:
-        logger.error(f"Claude vision error for {image_path}: {e}")
-        return f"[Image: {image_path.name} — vision analysis failed: {e}]"
 
 
 def extract_pdf_text(pdf_path: Path) -> str:
@@ -902,12 +718,20 @@ Guidelines for routing:
 Use [[double bracket]] syntax for important concepts in the markdown field."""
 
     try:
-        response = client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=2048,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        text = response.content[0].text
+        if LLM_BACKEND == "ollama":
+            text = _call_ollama("", prompt)
+        elif HAS_ANTHROPIC:
+            response = client.messages.create(
+                model="claude-opus-4-5",
+                max_tokens=2048,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            text = response.content[0].text
+        else:
+            log.error("No LLM backend available")
+            return {"title": source_name, "summary": content[:200], "route": route_content(content),
+                    "markdown": content, "wikilinks": [], "concepts": [], "events": [], "people": [],
+                    "dates": [], "tags": []}
         # Extract JSON from response
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
         if json_match:

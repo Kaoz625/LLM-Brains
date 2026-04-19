@@ -1,0 +1,7 @@
+{
+  "tool_name": "Read",
+  "tool_input_preview": "{\"file_path\":\"/Users/markususche/Documents/NYCTailblazers/clients/Trapables/branding/brand-research.md\"}",
+  "error": "File content (48171 tokens) exceeds maximum allowed tokens (10000). Use offset and limit parameters to read specific portions of the file, or search for specific content instead of reading the whole file.",
+  "timestamp": "2026-04-10T20:14:40.966Z",
+  "retry_count": 1
+}
