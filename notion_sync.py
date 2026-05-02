@@ -22,6 +22,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -628,11 +629,24 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
             else:
                 post_parent_id = posts_page_id
 
+            for _attempt in range(4):
+                try:
+                    page = client.pages.create(
+                        parent={"type": "page_id", "page_id": post_parent_id},
+                        properties={"title": [{"text": {"content": title[:100]}}]},
+                    )
+                    time.sleep(0.35)  # ~3 req/s — Notion rate limit
+                    break
+                except Exception as _e:
+                    if "rate" in str(_e).lower() and _attempt < 3:
+                        time.sleep(15 * (_attempt + 1))
+                        continue
+                    print(f"    ERROR creating post '{title}': {_e}")
+                    page = None
+                    break
+            if not page:
+                continue
             try:
-                page = client.pages.create(
-                    parent={"type": "page_id", "page_id": post_parent_id},
-                    properties={"title": [{"text": {"content": title[:100]}}]},
-                )
                 post_page_id = page["id"]
 
                 # Build Skool-style blocks
