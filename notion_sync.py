@@ -342,16 +342,38 @@ def extract_post_structured(content: str) -> dict:
     return {"author": author, "date": date_str, "body": body, "comments": comments}
 
 
+_BACKOFF = [5, 20, 60, 120]  # seconds to wait on successive rate-limit hits
+
+
+def notion_req(fn, *args, **kwargs):
+    """Call a Notion API function with exponential backoff on rate limits (429)."""
+    for attempt, wait in enumerate([0] + _BACKOFF):
+        if wait:
+            print(f"    Rate limited — waiting {wait}s (attempt {attempt})...")
+            time.sleep(wait)
+        try:
+            result = fn(*args, **kwargs)
+            time.sleep(0.4)  # ~2.5 req/s steady state
+            return result
+        except Exception as e:
+            err = str(e).lower()
+            if ("rate" in err or "429" in err) and attempt < len(_BACKOFF):
+                continue
+            raise
+    raise RuntimeError("Notion rate limit: max retries exceeded")
+
+
 def append_blocks_batched(client, page_id: str, blocks: list[dict]):
-    """Append blocks in batches of NOTION_BLOCK_LIMIT."""
+    """Append blocks in batches of NOTION_BLOCK_LIMIT with rate-limit retry."""
     for i in range(0, len(blocks), NOTION_BLOCK_LIMIT):
-        client.blocks.children.append(block_id=page_id, children=blocks[i:i + NOTION_BLOCK_LIMIT])
+        notion_req(client.blocks.children.append,
+                   block_id=page_id, children=blocks[i:i + NOTION_BLOCK_LIMIT])
 
 
 def find_child_page(client, parent_id: str, title: str) -> str | None:
     """Search for an existing child page with given title."""
     try:
-        results = client.blocks.children.list(block_id=parent_id)
+        results = notion_req(client.blocks.children.list, block_id=parent_id)
         for block in results.get("results", []):
             if block.get("type") == "child_page":
                 if block["child_page"].get("title", "").strip() == title.strip():
@@ -376,20 +398,12 @@ def get_or_create_page(client, parent_id: str, title: str, icon: str = "", dry_r
     if icon:
         kwargs["icon"] = {"type": "emoji", "emoji": icon}
 
-    for _att in range(4):
-        try:
-            page = client.pages.create(**kwargs)
-            time.sleep(0.5)
-            return page["id"]
-        except Exception as e:
-            if "rate" in str(e).lower() and _att < 3:
-                wait = 60 * (_att + 1)
-                print(f"    Rate limited — waiting {wait}s...")
-                time.sleep(wait)
-                continue
-            print(f"    ERROR creating page '{title}': {e}")
-            return None
-    return None
+    try:
+        page = notion_req(client.pages.create, **kwargs)
+        return page["id"]
+    except Exception as e:
+        print(f"    ERROR creating page '{title}': {e}")
+        return None
 
 
 def get_or_create_root_page(client, state: dict, dry_run: bool) -> str | None:
@@ -637,23 +651,15 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
             else:
                 post_parent_id = posts_page_id
 
-            for _attempt in range(4):
-                try:
-                    page = client.pages.create(
-                        parent={"type": "page_id", "page_id": post_parent_id},
-                        properties={"title": [{"text": {"content": title[:100]}}]},
-                    )
-                    time.sleep(0.5)  # ~2 req/s — stay well under Notion's rate limit
-                    break
-                except Exception as _e:
-                    if "rate" in str(_e).lower() and _attempt < 3:
-                        wait = 60 * (_attempt + 1)  # 60, 120, 180s
-                        print(f"    Rate limited — waiting {wait}s before retry {_attempt+1}/3...")
-                        time.sleep(wait)
-                        continue
-                    print(f"    ERROR creating post '{title}': {_e}")
-                    page = None
-                    break
+            try:
+                page = notion_req(
+                    client.pages.create,
+                    parent={"type": "page_id", "page_id": post_parent_id},
+                    properties={"title": [{"text": {"content": title[:100]}}]},
+                )
+            except Exception as _e:
+                print(f"    ERROR creating post '{title}': {_e}")
+                page = None
             if not page:
                 continue
             try:
