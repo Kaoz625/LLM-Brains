@@ -13,7 +13,7 @@ ATTEMPT=0
 while true; do
   ATTEMPT=$((ATTEMPT + 1))
   echo "$(date '+%Y-%m-%d %H:%M:%S') — Starting sync attempt $ATTEMPT..."
-  python -u notion_sync.py $ARGS
+  python3 -u notion_sync.py $ARGS
   EXIT=$?
   echo "$(date '+%Y-%m-%d %H:%M:%S') — Sync exited (code $EXIT)"
 
