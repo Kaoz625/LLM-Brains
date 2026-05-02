@@ -14,6 +14,7 @@ After running this, run:
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).parent
@@ -41,15 +42,22 @@ def load_token() -> str:
     sys.exit(1)
 
 
-def archive_page(client, page_id: str, dry_run: bool) -> bool:
+def archive_page(client, page_id: str, dry_run: bool, retries: int = 3) -> bool:
     if dry_run:
         return True
-    try:
-        client.pages.update(page_id=page_id, archived=True)
-        return True
-    except Exception as e:
-        print(f"  WARN: Could not archive {page_id}: {e}")
-        return False
+    for attempt in range(retries):
+        try:
+            client.pages.update(page_id=page_id, archived=True)
+            return True
+        except Exception as e:
+            msg = str(e)
+            if "rate" in msg.lower() and attempt < retries - 1:
+                wait = 10 * (attempt + 1)
+                time.sleep(wait)
+                continue
+            print(f"  WARN: Could not archive {page_id}: {e}")
+            return False
+    return False
 
 
 def cleanup_community(client, slug: str, state: dict, dry_run: bool):
@@ -73,6 +81,8 @@ def cleanup_community(client, slug: str, state: dict, dry_run: bool):
             archived += 1
             if archived % 50 == 0:
                 print(f"    Archived {archived}/{total}...")
+            if not dry_run:
+                time.sleep(0.35)  # ~3 req/s — well under Notion's rate limit
         else:
             failed += 1
 
