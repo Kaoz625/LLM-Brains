@@ -376,12 +376,20 @@ def get_or_create_page(client, parent_id: str, title: str, icon: str = "", dry_r
     if icon:
         kwargs["icon"] = {"type": "emoji", "emoji": icon}
 
-    try:
-        page = client.pages.create(**kwargs)
-        return page["id"]
-    except Exception as e:
-        print(f"    ERROR creating page '{title}': {e}")
-        return None
+    for _att in range(4):
+        try:
+            page = client.pages.create(**kwargs)
+            time.sleep(0.5)
+            return page["id"]
+        except Exception as e:
+            if "rate" in str(e).lower() and _att < 3:
+                wait = 60 * (_att + 1)
+                print(f"    Rate limited — waiting {wait}s...")
+                time.sleep(wait)
+                continue
+            print(f"    ERROR creating page '{title}': {e}")
+            return None
+    return None
 
 
 def get_or_create_root_page(client, state: dict, dry_run: bool) -> str | None:
@@ -635,11 +643,13 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
                         parent={"type": "page_id", "page_id": post_parent_id},
                         properties={"title": [{"text": {"content": title[:100]}}]},
                     )
-                    time.sleep(0.35)  # ~3 req/s — Notion rate limit
+                    time.sleep(0.5)  # ~2 req/s — stay well under Notion's rate limit
                     break
                 except Exception as _e:
                     if "rate" in str(_e).lower() and _attempt < 3:
-                        time.sleep(15 * (_attempt + 1))
+                        wait = 60 * (_attempt + 1)  # 60, 120, 180s
+                        print(f"    Rate limited — waiting {wait}s before retry {_attempt+1}/3...")
+                        time.sleep(wait)
                         continue
                     print(f"    ERROR creating post '{title}': {_e}")
                     page = None
