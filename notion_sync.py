@@ -418,7 +418,7 @@ def get_or_create_root_page(client, state: dict, dry_run: bool) -> str | None:
 
     # Search for existing page first
     try:
-        results = client.search(query="Skool Communities", filter={"property": "object", "value": "page"})
+        results = notion_req(client.search, query="Skool Communities", filter={"property": "object", "value": "page"})
         for r in results.get("results", []):
             title_prop = r.get("properties", {}).get("title", {})
             title_parts = title_prop.get("title", [])
@@ -717,7 +717,8 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Sync scraped Skool content to Notion")
-    parser.add_argument("--community", help="Sync only this community slug")
+    parser.add_argument("--community", action="append", dest="communities_filter",
+                        metavar="SLUG", help="Sync only this community slug (repeatable)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--categorize", action="store_true",
                         help="(stub) AI-categorize posts by topic — no-op, reserved for future Claude API pass")
@@ -729,10 +730,11 @@ def main():
     args = parser.parse_args()
 
     communities = json.loads(COMMUNITIES_FILE.read_text())["communities"]
-    if args.community:
-        communities = [c for c in communities if c["slug"] == args.community]
+    if args.communities_filter:
+        slugs = set(args.communities_filter)
+        communities = [c for c in communities if c["slug"] in slugs]
         if not communities:
-            print(f"ERROR: Community '{args.community}' not found")
+            print(f"ERROR: No communities matched: {args.communities_filter}")
             sys.exit(1)
 
     client = get_client()
@@ -770,7 +772,7 @@ def main():
                 if not isinstance(page_id, str) or page_id.startswith("dry-run"):
                     continue
                 try:
-                    client.pages.update(page_id=page_id, archived=True)
+                    notion_req(client.pages.update, page_id=page_id, archived=True)
                     archived += 1
                 except Exception:
                     pass
