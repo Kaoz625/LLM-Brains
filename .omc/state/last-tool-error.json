@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd ~/Documents/NYCTailblazers/LLM-Brains && python3 -c \\\"\\nimport json, os\\nfrom pathlib import Path\\nfrom notion_client import Client\\n\\n# Load token\\ncreds = Path.home() / '.credentials/...",
-  "error": "Exit code 1\nTraceback (most recent call last):\n  File \"<string>\", line 17, in <module>\n    print('Properties:', list(db['properties'].keys()))\n                              ~~^^^^^^^^^^^^^^\nKeyError: 'properties'\nDB ID: 94982e4e-eaec-4a52-ac04-4ba4661e260f",
-  "timestamp": "2026-05-01T08:15:09.019Z",
-  "retry_count": 2
-}
