@@ -1,0 +1,29 @@
+{
+  "communities": [
+    {
+      "slug": "aiautomationsbyjack",
+      "name": "Jack Roberts - AI Automations",
+      "has_classroom": true
+    },
+    {
+      "slug": "ai-seo-with-julian-goldie-1553",
+      "name": "Julian Goldie - AI SEO",
+      "has_classroom": true
+    },
+    {
+      "slug": "ai-seo-mastermind-group-3510",
+      "name": "AI SEO Mastermind Group",
+      "has_classroom": true
+    },
+    {
+      "slug": "ai-automation-society",
+      "name": "AI Automation Society",
+      "has_classroom": true
+    },
+    {
+      "slug": "robonuggets-free",
+      "name": "RoboNuggets",
+      "has_classroom": true
+    }
+  ]
+}

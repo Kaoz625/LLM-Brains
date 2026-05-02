@@ -1,0 +1,7 @@
+brain/
+__pycache__/
+*.pyc
+*.pyo
+.env
+skool_sync_state.json
+.DS_Store
