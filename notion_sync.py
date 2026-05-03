@@ -652,6 +652,13 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
                 post_parent_id = posts_page_id
 
             try:
+                # Double-dedup: check Notion itself in case state was reset
+                existing_post_id = find_child_page(client, post_parent_id, title[:100])
+                if existing_post_id:
+                    synced_posts[key] = existing_post_id
+                    save_state(state)
+                    continue
+
                 page = notion_req(
                     client.pages.create,
                     parent={"type": "page_id", "page_id": post_parent_id},
