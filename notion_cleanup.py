@@ -21,11 +21,12 @@ SCRIPT_DIR = Path(__file__).parent
 STATE_FILE = SCRIPT_DIR / "skool_sync_state.json"
 CREDS_FILE = Path.home() / ".credentials" / "api-keys.env"
 
-# Communities with duplicate pages — the 3 dirty ones
+# Communities with duplicate pages — all dirty ones (use actual slugs from state)
 DIRTY_COMMUNITIES = {
     "aiautomationsbyjack",
-    "ai-seo-with-julian-goldie",
-    "ai-seo-mastermind-group",
+    "ai-seo-with-julian-goldie-1553",
+    "ai-seo-mastermind-group-3510",
+    "ai-automation-society",
 }
 
 
@@ -60,7 +61,7 @@ def archive_page(client, page_id: str, dry_run: bool, retries: int = 3) -> bool:
     return False
 
 
-def cleanup_community(client, slug: str, state: dict, dry_run: bool):
+def cleanup_community(client, slug: str, state: dict, dry_run: bool, fast: bool = False):
     notion_cs = state.get(slug, {}).get("notion", {})
     if not notion_cs:
         print(f"  {slug}: no Notion state found, skipping")
@@ -68,36 +69,47 @@ def cleanup_community(client, slug: str, state: dict, dry_run: bool):
 
     synced_posts = notion_cs.get("synced_posts", {})
     month_pages = notion_cs.get("month_pages", {})
-
-    total = len(synced_posts)
-    print(f"\n  {slug}: {total} synced post pages to archive")
-
-    archived = 0
-    failed = 0
-    for key, page_id in synced_posts.items():
-        if not isinstance(page_id, str) or page_id.startswith("dry-run"):
-            continue
-        if archive_page(client, page_id, dry_run):
-            archived += 1
-            if archived % 50 == 0:
-                print(f"    Archived {archived}/{total}...")
-            if not dry_run:
-                time.sleep(0.35)  # ~3 req/s — well under Notion's rate limit
-        else:
-            failed += 1
-
-    # Archive month bucket pages too
-    for month_key, mp_id in month_pages.items():
-        if isinstance(mp_id, str) and not mp_id.startswith("dry-run"):
-            archive_page(client, mp_id, dry_run)
-
-    # Archive the Posts page itself so it's recreated fresh
     posts_page_id = notion_cs.get("notion_posts_page_id")
-    if posts_page_id and not dry_run:
-        archive_page(client, posts_page_id, dry_run)
+    total = len(synced_posts)
 
-    action = "Would archive" if dry_run else "Archived"
-    print(f"  {slug}: {action} {archived} pages ({failed} failed)")
+    if fast:
+        # Fast mode: archive only the parent Posts page (Notion hides all children).
+        # Takes 1-3 API calls instead of N*1 for thousands of child pages.
+        print(f"\n  {slug}: fast mode — {total} tracked pages, archiving parent only")
+        if posts_page_id:
+            if archive_page(client, posts_page_id, dry_run):
+                action = "Would archive" if dry_run else "Archived"
+                print(f"  {slug}: {action} Posts parent page ({posts_page_id})")
+            else:
+                print(f"  {slug}: WARN — could not archive Posts page")
+        for month_key, mp_id in month_pages.items():
+            if isinstance(mp_id, str) and not mp_id.startswith("dry-run"):
+                archive_page(client, mp_id, dry_run)
+    else:
+        print(f"\n  {slug}: {total} synced post pages to archive")
+        archived = 0
+        failed = 0
+        for key, page_id in synced_posts.items():
+            if not isinstance(page_id, str) or page_id.startswith("dry-run"):
+                continue
+            if archive_page(client, page_id, dry_run):
+                archived += 1
+                if archived % 50 == 0:
+                    print(f"    Archived {archived}/{total}...")
+                if not dry_run:
+                    time.sleep(0.35)  # ~3 req/s — well under Notion's rate limit
+            else:
+                failed += 1
+
+        for month_key, mp_id in month_pages.items():
+            if isinstance(mp_id, str) and not mp_id.startswith("dry-run"):
+                archive_page(client, mp_id, dry_run)
+
+        if posts_page_id and not dry_run:
+            archive_page(client, posts_page_id, dry_run)
+
+        action = "Would archive" if dry_run else "Archived"
+        print(f"  {slug}: {action} {archived} pages ({failed} failed)")
 
     if not dry_run:
         # Clear posts state — notion_sync.py will recreate cleanly with PostID dedup
@@ -111,8 +123,12 @@ def main():
     parser = argparse.ArgumentParser(description="Archive duplicate Notion post pages")
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be deleted without making changes")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="Skip confirmation prompt (for automation)")
+    parser.add_argument("--fast", action="store_true",
+                        help="Archive only parent Posts page (seconds) instead of each child (hours)")
     parser.add_argument("--community",
-                        help="Clean only this community slug (default: all 3 dirty ones)")
+                        help="Clean only this community slug (default: all dirty ones)")
     args = parser.parse_args()
 
     if not STATE_FILE.exists():
@@ -129,7 +145,7 @@ def main():
 
     print(f"\n{'DRY RUN — ' if args.dry_run else ''}Cleaning {len(targets)} communities")
     print("  This will archive all post pages and reset synced state.")
-    if not args.dry_run:
+    if not args.dry_run and not args.yes:
         confirm = input("  Type 'yes' to continue: ").strip().lower()
         if confirm != "yes":
             print("  Aborted.")
@@ -139,7 +155,7 @@ def main():
     client = Client(auth=load_token())
 
     for slug in targets:
-        cleanup_community(client, slug, state, args.dry_run)
+        cleanup_community(client, slug, state, args.dry_run, fast=args.fast)
 
     if not args.dry_run:
         STATE_FILE.write_text(json.dumps(state, indent=2))
