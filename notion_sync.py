@@ -112,6 +112,105 @@ def _paragraph(text: str) -> list[dict]:
     return blocks
 
 
+# ── inline markdown → Notion rich_text ────────────────────────────────────────
+_INLINE_PAT = re.compile(
+    r'\*\*(.+?)\*\*'                  # **bold**
+    r'|\*([^*\n]+?)\*'                # *italic*
+    r'|`([^`\n]+?)`'                  # `code`
+    r'|\[([^\]]+)\]\(([^)\s]+)\)'     # [text](url)
+)
+
+_VIDEO_URL_PAT = re.compile(
+    r'^https?://(?:www\.)?(?:youtube\.com/watch|youtu\.be/|loom\.com/share/|vimeo\.com/)\S*$',
+    re.IGNORECASE,
+)
+_BARE_URL_PAT = re.compile(r'^https?://\S+$')
+_IMAGE_LINE_PAT = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
+_BULLET_PAT = re.compile(r'^[-*+]\s+(.+)$')
+_NUMBERED_PAT = re.compile(r'^\d+\.\s+(.+)$')
+
+
+def _rich_with_links(text: str) -> list[dict]:
+    """Parse inline markdown (bold, italic, code, links) into Notion rich_text elements."""
+    parts = []
+    pos = 0
+    for m in _INLINE_PAT.finditer(text):
+        if m.start() > pos:
+            parts.extend(_rich(text[pos:m.start()]))
+        pos = m.end()
+        if m.group(1):  # **bold**
+            chunk, _ = _utf16_slice(m.group(1), MAX_RICH_TEXT)
+            parts.append({"type": "text", "text": {"content": chunk}, "annotations": {"bold": True}})
+        elif m.group(2):  # *italic*
+            chunk, _ = _utf16_slice(m.group(2), MAX_RICH_TEXT)
+            parts.append({"type": "text", "text": {"content": chunk}, "annotations": {"italic": True}})
+        elif m.group(3):  # `code`
+            chunk, _ = _utf16_slice(m.group(3), MAX_RICH_TEXT)
+            parts.append({"type": "text", "text": {"content": chunk}, "annotations": {"code": True}})
+        elif m.group(4) and m.group(5):  # [text](url)
+            chunk, _ = _utf16_slice(m.group(4), MAX_RICH_TEXT)
+            parts.append({"type": "text", "text": {"content": chunk, "link": {"url": m.group(5)}}})
+    if pos < len(text):
+        parts.extend(_rich(text[pos:]))
+    return parts or [{"type": "text", "text": {"content": ""}}]
+
+
+def _paragraph_rich(text: str) -> list[dict]:
+    """Paragraph blocks with inline link/bold/italic support."""
+    rich = _rich_with_links(text)
+    blocks = []
+    while rich:
+        chunk, rich = rich[:100], rich[100:]
+        blocks.append({"object": "block", "type": "paragraph", "paragraph": {"rich_text": chunk}})
+    return blocks or [{"object": "block", "type": "paragraph", "paragraph": {"rich_text": [{"type": "text", "text": {"content": ""}}]}}]
+
+
+def _lines_to_blocks(text: str) -> list[dict]:
+    """Convert a text block (no double newlines) to Notion blocks, detecting lists/videos/images."""
+    blocks = []
+    text_buf: list[str] = []
+
+    def flush():
+        if text_buf:
+            blocks.extend(_paragraph_rich(" ".join(text_buf)))
+            text_buf.clear()
+
+    for ln in text.splitlines():
+        stripped = ln.strip()
+        if not stripped:
+            flush()
+            continue
+        img_m = _IMAGE_LINE_PAT.match(stripped)
+        bullet_m = _BULLET_PAT.match(stripped)
+        num_m = _NUMBERED_PAT.match(stripped)
+        if img_m:
+            flush()
+            caption, url = img_m.group(1), img_m.group(2)
+            blocks.append({"object": "block", "type": "image",
+                           "image": {"type": "external", "external": {"url": url},
+                                     "caption": _rich(caption) if caption else []}})
+        elif _VIDEO_URL_PAT.match(stripped):
+            flush()
+            blocks.append({"object": "block", "type": "video",
+                           "video": {"type": "external", "external": {"url": stripped}}})
+        elif _BARE_URL_PAT.match(stripped):
+            flush()
+            blocks.append({"object": "block", "type": "bookmark", "bookmark": {"url": stripped}})
+        elif bullet_m:
+            flush()
+            blocks.append({"object": "block", "type": "bulleted_list_item",
+                           "bulleted_list_item": {"rich_text": _rich_with_links(bullet_m.group(1))}})
+        elif num_m:
+            flush()
+            blocks.append({"object": "block", "type": "numbered_list_item",
+                           "numbered_list_item": {"rich_text": _rich_with_links(num_m.group(1))}})
+        else:
+            text_buf.append(stripped)
+
+    flush()
+    return blocks
+
+
 def _divider() -> dict:
     return {"object": "block", "type": "divider", "divider": {}}
 
@@ -170,7 +269,7 @@ def extract_post_body(content: str, include_comments: bool = True) -> str:
 
 
 def markdown_to_blocks(md: str) -> list[dict]:
-    """Convert markdown text to Notion blocks (headings + paragraphs)."""
+    """Convert markdown to Notion blocks: headings, lists, videos, images, bookmarks, paragraphs."""
     blocks = []
     for para in re.split(r'\n{2,}', md.strip()):
         para = para.strip()
@@ -183,7 +282,7 @@ def markdown_to_blocks(md: str) -> list[dict]:
         elif para.startswith("# "):
             blocks.append(_heading(1, para[2:].strip()))
         else:
-            blocks.extend(_paragraph(para))
+            blocks.extend(_lines_to_blocks(para))
     return blocks
 
 
@@ -710,16 +809,16 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
                 # Build Skool-style blocks
                 blocks = []
 
-                # Header: author • date • link
+                # Header: author • date, then clickable bookmark to original post
                 header_parts = []
                 if parsed["author"]:
                     header_parts.append(f"👤 {parsed['author']}")
                 if parsed["date"]:
                     header_parts.append(f"📅 {parsed['date']}")
-                if post_url:
-                    header_parts.append(f"🔗 {post_url}")
                 if header_parts:
                     blocks.extend(_paragraph("  •  ".join(header_parts)))
+                if post_url:
+                    blocks.append({"object": "block", "type": "bookmark", "bookmark": {"url": post_url}})
                 blocks.append(_divider())
 
                 # Post body
