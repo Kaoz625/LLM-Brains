@@ -383,7 +383,28 @@ def find_child_page(client, parent_id: str, title: str) -> str | None:
     return None
 
 
-def get_or_create_page(client, parent_id: str, title: str, icon: str = "", dry_run: bool = False) -> str | None:
+def _icon_from_title(title: str, default: str = "📄") -> str:
+    """Extract leading emoji from title, or return default."""
+    import unicodedata
+    for ch in title[:4]:
+        cat = unicodedata.category(ch)
+        if cat in ("So", "Sm", "Sk") or ord(ch) > 0x2600:
+            return ch
+    return default
+
+
+_COMMUNITY_COVERS = {
+    "aiautomationsbyjack":       "https://images.unsplash.com/photo-1677442135703-1787eea5ce01?w=1500&q=80",
+    "ai-automation-society":     "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?w=1500&q=80",
+    "ai-seo-with-julian-goldie-1553": "https://images.unsplash.com/photo-1432888622747-4eb9a8efeb07?w=1500&q=80",
+    "ai-seo-mastermind-group-3510":   "https://images.unsplash.com/photo-1432888622747-4eb9a8efeb07?w=1500&q=80",
+    "robonuggets-free":          "https://images.unsplash.com/photo-1485827404703-89b55fcc595e?w=1500&q=80",
+}
+_DEFAULT_COVER = "https://images.unsplash.com/photo-1518770660439-4636190af475?w=1500&q=80"
+
+
+def get_or_create_page(client, parent_id: str, title: str, icon: str = "",
+                       cover_url: str = "", dry_run: bool = False) -> str | None:
     """Return page ID, creating it under parent if needed."""
     existing = find_child_page(client, parent_id, title)
     if existing:
@@ -397,6 +418,8 @@ def get_or_create_page(client, parent_id: str, title: str, icon: str = "", dry_r
     kwargs = {"parent": {"page_id": parent_id}, "properties": props}
     if icon:
         kwargs["icon"] = {"type": "emoji", "emoji": icon}
+    if cover_url:
+        kwargs["cover"] = {"type": "external", "external": {"url": cover_url}}
 
     try:
         page = notion_req(client.pages.create, **kwargs)
@@ -493,8 +516,10 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
         return
 
     # Community root page
+    community_cover = _COMMUNITY_COVERS.get(slug, _DEFAULT_COVER)
     community_page_id = notion_cs.get("page_id") or get_or_create_page(
-        client, root_page_id, f"🎓 {community_name}", dry_run=dry_run
+        client, root_page_id, f"🎓 {community_name}",
+        icon="🎓", cover_url=community_cover, dry_run=dry_run
     )
     if not community_page_id:
         return
@@ -524,8 +549,10 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
             else:
                 course_name = course_dir.name.replace("-", " ").title()
 
+            course_icon = _icon_from_title(course_name, "📚")
             course_page_id = lesson_pages.get(f"course:{course_dir.name}") or get_or_create_page(
-                client, classroom_page_id, course_name, dry_run=dry_run
+                client, classroom_page_id, course_name,
+                icon=course_icon, cover_url=community_cover, dry_run=dry_run
             )
             if course_page_id and not dry_run:
                 lesson_pages[f"course:{course_dir.name}"] = course_page_id
@@ -546,7 +573,8 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
                 if section_name:
                     sec_key = f"section:{course_dir.name}:{slugify(section_name)}"
                     section_page_id = lesson_pages.get(sec_key) or get_or_create_page(
-                        client, course_page_id, section_name, dry_run=dry_run
+                        client, course_page_id, section_name,
+                        icon=_icon_from_title(section_name, "📂"), dry_run=dry_run
                     )
                     if section_page_id and not dry_run:
                         lesson_pages[sec_key] = section_page_id
@@ -565,7 +593,10 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
                         new_lessons += 1
                         continue
 
-                    lesson_page_id = get_or_create_page(client, parent_id, lesson_title, dry_run=False)
+                    lesson_icon = "🎬" if url else _icon_from_title(lesson_title, "📝")
+                    lesson_page_id = get_or_create_page(
+                        client, parent_id, lesson_title, icon=lesson_icon, dry_run=False
+                    )
                     if not lesson_page_id:
                         continue
 
@@ -616,14 +647,14 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
 
         for post_file in sorted(posts_dir.glob("*.md"), reverse=True):
             meta, raw_content = parse_header(post_file)
-            # Dedup by PostID (stable across re-scrapes), not filename (changes with date prefix)
-            post_id_key = meta.get("PostID") or post_file.stem
-            key = post_id_key
+            # Dedup key is PostID alone — stable across re-scrapes regardless of title changes
+            post_id = meta.get("PostID") or post_file.stem
+            key = post_id
             if key in synced_posts:
                 continue
 
             parsed = extract_post_structured(raw_content)
-            title = meta.get("Title") or post_id_key
+            title = meta.get("Title") or post_id
             post_url = meta.get("URL", "")
             scraped = meta.get("Scraped", "")
 
@@ -643,7 +674,7 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
             # Get or create month bucket page
             if month_key:
                 if month_key not in month_pages:
-                    mp_id = get_or_create_page(client, posts_page_id, month_key, dry_run=False)
+                    mp_id = get_or_create_page(client, posts_page_id, month_key, icon="📅", dry_run=False)
                     if mp_id:
                         month_pages[month_key] = mp_id
                         save_state(state)
@@ -652,17 +683,21 @@ def sync_community(client, slug: str, community_name: str, root_page_id: str,
                 post_parent_id = posts_page_id
 
             try:
-                # Double-dedup: check Notion itself in case state was reset
-                existing_post_id = find_child_page(client, post_parent_id, title[:100])
-                if existing_post_id:
-                    synced_posts[key] = existing_post_id
+                # Double-dedup: query Notion for a page with matching PostID property
+                # (catches cases where local state was reset or lost)
+                existing_page_id = _find_post_by_id(client, post_parent_id, post_id)
+                if existing_page_id:
+                    synced_posts[key] = existing_page_id
                     save_state(state)
                     continue
 
                 page = notion_req(
                     client.pages.create,
                     parent={"type": "page_id", "page_id": post_parent_id},
-                    properties={"title": [{"text": {"content": title[:100]}}]},
+                    icon={"type": "emoji", "emoji": _icon_from_title(title, "💬")},
+                    properties={
+                        "title": [{"text": {"content": title[:100]}}],
+                    },
                 )
             except Exception as _e:
                 print(f"    ERROR creating post '{title}': {_e}")
