@@ -223,13 +223,16 @@ def extract_post_body(content: str, include_comments: bool = True) -> str:
     Comments follow the Like/reaction section and are included when include_comments=True.
     """
     lines = content.splitlines()
-    date_pat = re.compile(r'^\d+[dwmhsy]')
+    date_pat = re.compile(
+        r'^\d+[dwmhsy]'
+        r'|^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+'
+    )
 
     # Find post body start (line after the date/category line)
     start_idx = 0
     for i, line in enumerate(lines):
         stripped = line.strip()
-        if date_pat.match(stripped) and '•' in stripped:
+        if date_pat.match(stripped) and ('•' in stripped or re.match(r'^\d+[dwmhsy]$', stripped)):
             start_idx = i + 1
             break
 
@@ -357,7 +360,6 @@ def clean_lesson_content(content: str, lesson_url: str = "") -> str:
 def extract_post_structured(content: str) -> dict:
     """Parse Skool full-page markdown into structured fields: author, date, body, comments."""
     lines = content.splitlines()
-    date_pat = re.compile(r'^\d+[dwmhsy]')
 
     author = ""
     date_str = ""
@@ -365,20 +367,39 @@ def extract_post_structured(content: str) -> dict:
 
     _nav_pat = re.compile(
         r'^\[(?:Community|Classroom|Calendar|Members|Leaderboards|About)\]'
-        r'|^!\[.*\]\(https://www\.skool\.com'
+        r'|^!\[.*\]\(https://(?:www|assets)\.skool\.com'
         r'|^https://www\.skool\.com'
+        r'|^\[ *!\[.*\]\(https://(?:www|assets)\.skool\.com'  # wrapped avatar links
+        r'|^\[.+\]\(https://www\.skool\.com/(?!@)'  # community/course links (not user @profiles)
+    )
+
+    # date_pat matches relative ("10d", "3w") and absolute ("Mar 5", "Apr 12") Skool date formats
+    date_pat = re.compile(
+        r'^\d+[dwmhsy]'
+        r'|^(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+'
     )
 
     for i, line in enumerate(lines):
         stripped = line.strip()
-        # Date line pattern: "10d • [category](url)" or just "10d"
+        # Date line pattern: "10d • [category](url)" or "Mar 5 • [category](url)" or just "10d"
         if date_pat.match(stripped) and ('•' in stripped or re.match(r'^\d+[dwmhsy]$', stripped)):
             date_str = stripped.split('•')[0].strip()
-            # Author is usually the non-empty line just before the date line
-            for j in range(i - 1, max(i - 5, -1), -1):
+            # Author is the name line before the date — skip rank-badge emoji lines and nav links
+            for j in range(i - 1, max(i - 10, -1), -1):
                 candidate = lines[j].strip()
-                if candidate and not candidate.startswith('!') and not candidate.startswith('[') \
-                        and not candidate.startswith('http') and len(candidate) < 80:
+                if not candidate:
+                    continue
+                if candidate.startswith('!') or candidate.startswith('http'):
+                    continue
+                # Extract author name from markdown link "[Name](url)"
+                link_m = re.match(r'^\[([^\]]+)\]\(https://www\.skool\.com/@', candidate)
+                if link_m:
+                    author = link_m.group(1)
+                    break
+                # Skip emoji-only rank badges and nav links
+                if candidate.startswith('['):
+                    continue
+                if len(candidate) < 80 and not all(ord(c) > 127 for c in candidate.replace(' ', '')):
                     author = candidate
                     break
             start_idx = i + 1
@@ -415,26 +436,37 @@ def extract_post_structured(content: str) -> dict:
             break
         raw_comment_lines.append(ln)
 
-    # Parse individual comment blocks: name → date → body → Like
+    # Parse individual comment blocks: avatar → [Name](url) → • date → body → Like
+    # Comment dates use "• Mar 5" or "• 10d" format (bullet-prefixed)
+    c_date_pat = re.compile(
+        r'^•\s*(?:\d+[dwmhsy]|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d+)'
+    )
+    _name_link_pat = re.compile(r'^\[([^\]]+)\]\(https://www\.skool\.com/@')
     comments = []
     c_lines = [l.strip() for l in raw_comment_lines if l.strip()]
     i = 0
     while i < len(c_lines):
-        # Detect commenter name (short, no links, followed by a date-ish line)
-        if (i + 1 < len(c_lines) and not c_lines[i].startswith('[')
-                and not c_lines[i].startswith('!')
-                and len(c_lines[i]) < 80
-                and date_pat.match(c_lines[i + 1])):
-            c_author = c_lines[i]
-            c_date = c_lines[i + 1]
+        # Extract commenter name from "[Name](skool/@...)" link
+        name_m = _name_link_pat.match(c_lines[i])
+        if name_m and i + 1 < len(c_lines) and c_date_pat.match(c_lines[i + 1]):
+            c_author = name_m.group(1)
+            c_date = c_lines[i + 1].lstrip('• ').strip()
             i += 2
             c_body_lines = []
             while i < len(c_lines) and c_lines[i] != 'Like':
-                c_body_lines.append(c_lines[i])
+                ln = c_lines[i]
+                # Skip avatar lines, numeric like-counts, and Reply buttons
+                if (ln.startswith('[ !') or ln.startswith('![') or
+                        re.match(r'^\d+$', ln) or ln == 'Reply' or
+                        _name_link_pat.match(ln) or c_date_pat.match(ln)):
+                    break
+                c_body_lines.append(ln)
                 i += 1
             if i < len(c_lines) and c_lines[i] == 'Like':
-                i += 1  # skip Like
-            comments.append({"author": c_author, "date": c_date, "body": '\n'.join(c_body_lines)})
+                i += 1
+            if c_body_lines:
+                comments.append({"author": c_author, "date": c_date,
+                                  "body": '\n'.join(c_body_lines)})
         else:
             i += 1
 
@@ -482,12 +514,27 @@ def find_child_page(client, parent_id: str, title: str) -> str | None:
     return None
 
 
+def _find_post_by_id(client, parent_id: str, post_id: str) -> str | None:
+    """Double-dedup guard: check if a child page with post_id in its title already exists.
+
+    Best-effort only — primary dedup is local synced_posts state. Returns None if not found
+    or on any error, so the caller falls through to normal page creation.
+    """
+    try:
+        results = notion_req(client.blocks.children.list, block_id=parent_id)
+        for block in results.get("results", []):
+            if block.get("type") == "child_page":
+                if post_id in block["child_page"].get("title", ""):
+                    return block["id"]
+    except Exception:
+        pass
+    return None
+
+
 def _icon_from_title(title: str, default: str = "📄") -> str:
     """Extract leading emoji from title, or return default."""
-    import unicodedata
-    for ch in title[:4]:
-        cat = unicodedata.category(ch)
-        if cat in ("So", "Sm", "Sk") or ord(ch) > 0x2600:
+    for ch in title[:8]:
+        if ord(ch) >= 0x2600:  # emoji start at Misc Symbols (U+2600); excludes ASCII math like +
             return ch
     return default
 

@@ -77,14 +77,8 @@ def main():
 
     time.sleep(2)
 
-    # Step 3: Notion sync
-    log("Step 3: Syncing to Notion…")
-    notion_args = ["--dry-run"] if args.dry_run else []
-    if args.community:
-        notion_args += ["--community", args.community]
-    rc = run([PYTHON, "notion_sync.py"] + notion_args, False)
-    if rc != 0:
-        log("ERROR: Notion sync failed")
+    # Step 3: Notion sync disabled — content viewable in Obsidian via brain/raw/skool/
+    log("Step 3: Notion sync skipped (switched to Obsidian)")
 
     log("Auto-sync complete")
     log("=" * 60)
