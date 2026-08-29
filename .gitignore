@@ -5,6 +5,7 @@ __pycache__/
 *.pyo
 .env
 skool_sync_state.json
+skool_sync_state.json.bak
 skool_sync_state.json.bak-*
 .DS_Store
 *.db
