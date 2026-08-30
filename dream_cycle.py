@@ -42,21 +42,75 @@ BRAIN_DIRS = {
 # Skool subtree is managed by notion_sync — skip it
 SKIP_SUBTREES = {"skool"}
 
-MODEL = "claude-haiku-4-5-20251001"
-MAX_TOKENS = 1024
+# ── which brain answers ────────────────────────────────────────────────────────
+# DEFAULT IS LITELLM ON mac2, NOT THE ANTHROPIC API. Every promotion from
+# 2026-03 to 2026-08-29 answered "Your credit balance is too low to access the
+# Anthropic API", so this script has been promoting 0 entries a night, silently,
+# for months (register MK-26). The credit is Markus's to top up; routing through
+# the proxy the fleet already runs costs nothing and works today.
+#
+# LiteLLM speaks the Anthropic wire format at /v1/messages, so the anthropic SDK
+# below needs no change beyond a base_url — the reply still arrives as
+# content[0].text. Verified live on 2026-08-29 against free-gpt-oss-120b:
+#   POST /v1/messages -> {"content":[{"type":"text","text":"{\"ok\":true}"}],
+#                         "stop_reason":"end_turn"}
+#
+# Set DREAM_CYCLE_DIRECT=1 to go straight to api.anthropic.com again once that
+# account has credit.
+LITELLM_BASE_URL = "http://100.88.99.116:4000"
+
+# A FREE model, deliberately. The fleet's stated mission is free tiers, and the
+# whole point of this change is to stop depending on a balance. Measured on
+# 2026-08-29: all eight free-* aliases in mac2's ~/litellm/config.yaml answer as
+# the SAME backend, openai/gpt-oss-120b served by Groq — the openrouter :free
+# routes those aliases name are not what actually replies. So naming a different
+# free alias here changes nothing today; it is written as an env override
+# because that collapse is a config bug on mac2, not a decision.
+MODEL = os.environ.get("DREAM_CYCLE_MODEL", "free-gpt-oss-120b")
+DIRECT_MODEL = "claude-haiku-4-5-20251001"
+
+# 1024 was enough for a non-reasoning haiku. gpt-oss-120b is a REASONING model
+# and its reasoning tokens are billed against this same budget while never
+# appearing in content — at max_tokens 40 a live call spent 38 of them thinking
+# and returned an EMPTY string with finish_reason "length". An empty string
+# reaches json.loads() below and raises, which would have swapped "no credit"
+# for "invalid JSON" and still promoted 0. Give the answer real room.
+MAX_TOKENS = 4096
 
 
 # ── credentials ────────────────────────────────────────────────────────────────
-def load_anthropic_key() -> str:
-    key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if key:
-        return key
+def read_cred(name: str) -> str:
+    """Env first, then ~/.credentials/api-keys.env. Never a literal in this file."""
+    val = os.environ.get(name, "")
+    if val:
+        return val
     if CREDS_FILE.exists():
         for line in CREDS_FILE.read_text().splitlines():
-            if line.startswith("ANTHROPIC_API_KEY="):
+            if line.startswith(f"{name}="):
                 return line.split("=", 1)[1].strip()
-    print("ERROR: ANTHROPIC_API_KEY not set. Add it to ~/.credentials/api-keys.env")
-    sys.exit(1)
+    return ""
+
+
+def build_client():
+    """Return (client, model). LiteLLM unless DREAM_CYCLE_DIRECT=1 asks otherwise."""
+    from anthropic import Anthropic
+
+    if os.environ.get("DREAM_CYCLE_DIRECT") == "1":
+        key = read_cred("ANTHROPIC_API_KEY")
+        if not key:
+            print("ERROR: DREAM_CYCLE_DIRECT=1 but ANTHROPIC_API_KEY is not set.")
+            sys.exit(1)
+        print(f"Model: {DIRECT_MODEL} (direct to api.anthropic.com)")
+        return Anthropic(api_key=key), DIRECT_MODEL
+
+    key = read_cred("LITELLM_MASTER_KEY")
+    if not key:
+        print("ERROR: LITELLM_MASTER_KEY not set. Add it to ~/.credentials/api-keys.env,")
+        print("       or set DREAM_CYCLE_DIRECT=1 to use the Anthropic API instead.")
+        sys.exit(1)
+    base = read_cred("LITELLM_BASE_URL") or LITELLM_BASE_URL
+    print(f"Model: {MODEL} via LiteLLM at {base}")
+    return Anthropic(api_key=key, base_url=base), MODEL
 
 
 # ── state ──────────────────────────────────────────────────────────────────────
@@ -125,7 +179,7 @@ Respond ONLY with valid JSON:
 """
 
 
-def promote_with_claude(client, content: str, meta: dict) -> dict | None:
+def promote_with_claude(client, model: str, content: str, meta: dict) -> dict | None:
     source = meta.get("SOURCE", "")
     source_type = meta.get("Type", "")
     context = f"Source: {source}\nType: {source_type}\n\n" if source else ""
@@ -133,12 +187,23 @@ def promote_with_claude(client, content: str, meta: dict) -> dict | None:
 
     try:
         msg = client.messages.create(
-            model=MODEL,
+            model=model,
             max_tokens=MAX_TOKENS,
             system=_SYSTEM,
             messages=[{"role": "user", "content": user_content}],
         )
-        raw = msg.content[0].text.strip()
+        # A reasoning model can return an EMPTY content list, or one text block
+        # holding "", when the whole token budget went to reasoning. Say that
+        # plainly instead of dying inside json.loads on an empty string — a
+        # truncated answer and a broken prompt are different problems and the
+        # log has to tell them apart.
+        blocks = [b for b in (msg.content or []) if getattr(b, "type", "") == "text"]
+        raw = blocks[0].text.strip() if blocks else ""
+        if not raw:
+            reason = getattr(msg, "stop_reason", "?")
+            print(f"    WARN: empty answer (stop_reason={reason}); "
+                  f"raise MAX_TOKENS if this says max_tokens")
+            return None
         # Strip markdown code fences if present
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
         result = json.loads(raw)
@@ -179,10 +244,7 @@ def write_promoted(category: str, title: str, summary: str,
 
 # ── main loop ──────────────────────────────────────────────────────────────────
 def run(age_hours: float, dry_run: bool, force: bool):
-    from anthropic import Anthropic
-
-    api_key = load_anthropic_key()
-    client = Anthropic(api_key=api_key)
+    client, model = build_client()
 
     state = load_state()
     promoted_set = set(state["promoted"].keys())
@@ -210,7 +272,7 @@ def run(age_hours: float, dry_run: bool, force: bool):
             continue
 
         print(f"  Promoting: {raw_file.name[:70]}")
-        result = promote_with_claude(client, content, meta)
+        result = promote_with_claude(client, model, content, meta)
         if not result:
             skipped += 1
             continue
