@@ -129,3 +129,47 @@ not a live outage — which is why the credit balance above outranks them.
 
     branch main, clean, level with origin/main at 670d558
     remote  https://github.com/Kaoz625/LLM-Brains.git
+
+---
+
+# HANDOFF — 2026-09-07, LLM-Brains (Chromium -> Comet)
+
+Working on: Markus's order, "there should be no more use of chromium this
+should be replaced with comet" — LLM-Brains was named as CONFIRMED CULPRIT #1
+(skool_scraper.py caught live spawning chrome-headless-shell at 05:55, hung 14
+min at 0% CPU on `--posts-only --max-pages 50`, killed by Markus).
+
+Last action: Fixed all 3 real Chromium/Chrome launches in skool_scraper.py —
+login() (was `p.chromium.launch(channel="chrome", headless=False)`),
+discover_communities(), and scrape() — all now go through new
+`comet_headless.py` (spawn Comet with `--headless=new`, poll
+`/json/version`, `connect_over_cdp`; kills via process group). scrape() now
+reuses ONE Comet CDP endpoint for crawl4ai's `BrowserConfig(use_managed_browser
+=True, cdp_url=...)` instead of crawl4ai launching its own separate internal
+Chromium (that double-launch was very likely PART of the hang/CPU picture).
+Committed `86439d6`, pushed to `github.com/Kaoz625/LLM-Brains.git`.
+
+Why it hung (my best-supported hypothesis, not fully proven): `crawler.arun()`
+with no explicit page timeout, against Skool's persistent websocket/long-poll
+connections, plus a SECOND Chromium (crawl4ai's own bundled one) fighting the
+first (Playwright's) for the same site session — `waitUntil`-style "network
+idle" never truly settles against a page that keeps a live socket open, so it
+sits at ~0% CPU forever waiting on a network event that never completes. The
+managed-browser fix (one browser, reused CDP, real Comet with real cookies
+instead of a fresh automated Chromium Skool can fingerprint) addresses the
+most likely trigger, but I did not reproduce the original hang under load to
+prove it, so treat this as fixed-and-plausible, not fixed-and-proven.
+
+Next step: Run `skool_scraper.py --posts-only --max-pages 50` for real (the
+exact command that hung before) and confirm it completes instead of hanging.
+I ran a much smaller smoke test only (see comet_headless.py's own inline
+verification: example.com fetch, title "Example Domain", 559 bytes) — the
+full scraper was not re-run end-to-end against Skool itself this session.
+
+Key files:
+  skool_scraper.py    the fixed culprit — 3 launch sites converted
+  comet_headless.py   new helper (spawn/poll/connect/killpg), also copied
+                       into nexgate's tools/ as a matching fix there
+
+Blockers: none for the code fix. The "did the hang actually stop" question
+needs one real `--posts-only --max-pages 50` run to close out for good.
