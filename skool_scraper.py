@@ -214,6 +214,8 @@ async def discover_communities() -> list[dict]:
     """Discover all Skool communities the user is a member of via sidebar links."""
     from playwright.async_api import async_playwright
 
+    from comet_headless import headless_comet_browser_async
+
     if not AUTH_FILE.exists():
         print(f"ERROR: No auth file at {AUTH_FILE}. Run --login first.")
         return []
@@ -222,65 +224,68 @@ async def discover_communities() -> list[dict]:
     found_slugs = []
 
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=True)
-        ctx = await browser.new_context(storage_state=str(AUTH_FILE))
-        page = await ctx.new_page()
+        async with headless_comet_browser_async(pw) as (browser, _handle):
+            ctx = await browser.new_context(storage_state=str(AUTH_FILE))
+            page = await ctx.new_page()
+            return await _discover_communities_page(page, ctx, browser, found_slugs)
 
-        await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
-        await asyncio.sleep(3)
 
-        # Extract all root-level hrefs (e.g. /aiautomationsbyjack)
-        hrefs = await page.eval_on_selector_all(
-            'a[href]',
-            'els => els.map(el => el.getAttribute("href"))'
-        )
+async def _discover_communities_page(page, ctx, browser, found_slugs) -> list[dict]:
+    await page.goto(BASE_URL, wait_until="domcontentloaded", timeout=30_000)
+    await asyncio.sleep(3)
 
-        seen = set()
-        for href in hrefs:
-            if not href or not href.startswith('/'):
-                continue
-            slug = href.strip('/').split('/')[0].split('?')[0]
-            if not slug or slug in _NON_COMMUNITY_PATHS:
-                continue
-            if slug.startswith('@') or slug.startswith('_') or slug.startswith('-'):
-                continue
-            if not re.match(r'^[a-z0-9][a-z0-9-]*$', slug):
-                continue
-            if slug not in seen:
-                seen.add(slug)
-                found_slugs.append(slug)
+    # Extract all root-level hrefs (e.g. /aiautomationsbyjack)
+    hrefs = await page.eval_on_selector_all(
+        'a[href]',
+        'els => els.map(el => el.getAttribute("href"))'
+    )
 
-        print(f"  Found {len(found_slugs)} candidate community slug(s): {', '.join(found_slugs)}")
+    seen = set()
+    for href in hrefs:
+        if not href or not href.startswith('/'):
+            continue
+        slug = href.strip('/').split('/')[0].split('?')[0]
+        if not slug or slug in _NON_COMMUNITY_PATHS:
+            continue
+        if slug.startswith('@') or slug.startswith('_') or slug.startswith('-'):
+            continue
+        if not re.match(r'^[a-z0-9][a-z0-9-]*$', slug):
+            continue
+        if slug not in seen:
+            seen.add(slug)
+            found_slugs.append(slug)
 
-        # Verify each slug and detect classroom
-        result = []
-        for slug in found_slugs:
-            try:
-                await page.goto(f"{BASE_URL}/{slug}", wait_until="domcontentloaded", timeout=20_000)
-                await asyncio.sleep(1)
+    print(f"  Found {len(found_slugs)} candidate community slug(s): {', '.join(found_slugs)}")
 
-                # Get community name from page title or h1
-                name = slug
-                for sel in ['h1', '[class*="group-name"]', '[class*="community-name"]',
-                            '[class*="GroupName"]', 'title']:
-                    el = await page.query_selector(sel)
-                    if el:
-                        raw = (await el.inner_text()).strip()
-                        if raw and raw.lower() not in ('skool', ''):
-                            name = raw.split('\n')[0].strip()
-                            break
+    # Verify each slug and detect classroom
+    result = []
+    for slug in found_slugs:
+        try:
+            await page.goto(f"{BASE_URL}/{slug}", wait_until="domcontentloaded", timeout=20_000)
+            await asyncio.sleep(1)
 
-                has_classroom = bool(
-                    await page.query_selector(f'a[href="/{slug}/classroom"]')
-                )
-                result.append({"slug": slug, "name": name, "has_classroom": has_classroom})
-                print(f"  Verified: {name} ({slug}) — classroom: {has_classroom}")
-            except Exception as e:
-                print(f"  Skipping {slug}: {e}")
+            # Get community name from page title or h1
+            name = slug
+            for sel in ['h1', '[class*="group-name"]', '[class*="community-name"]',
+                        '[class*="GroupName"]', 'title']:
+                el = await page.query_selector(sel)
+                if el:
+                    raw = (await el.inner_text()).strip()
+                    if raw and raw.lower() not in ('skool', ''):
+                        name = raw.split('\n')[0].strip()
+                        break
 
-        await ctx.close()
-        await browser.close()
+            has_classroom = bool(
+                await page.query_selector(f'a[href="/{slug}/classroom"]')
+            )
+            result.append({"slug": slug, "name": name, "has_classroom": has_classroom})
+            print(f"  Verified: {name} ({slug}) — classroom: {has_classroom}")
+        except Exception as e:
+            print(f"  Skipping {slug}: {e}")
 
+    await ctx.close()
+    # browser is a CDP connection to a headless Comet we own; the outer
+    # headless_comet_browser_async() context manager closes and stops it.
     return result
 
 
@@ -307,22 +312,38 @@ def run_discover():
 
 # ── login ──────────────────────────────────────────────────────────────────────
 def login():
-    """Open browser for user to log into Skool, save auth to ~/.skool/auth.json."""
+    """Open Markus's real, visible Comet for the user to log into Skool, save
+    auth to ~/.skool/auth.json.
+
+    Used to launch his real Google Chrome (channel="chrome", headless=False) —
+    banned by house rule (~/CLAUDE.md: "Anything that touches a real website
+    goes through Markus's Comet browser"). Now attaches to his already-running,
+    visible Comet over CDP instead of spawning a second, different browser.
+    """
     from playwright.sync_api import sync_playwright
 
-    print("Opening browser — log into skool.com, then close the browser window.")
+    from comet_headless import HIS_CDP_URL, visible_comet_available
+
+    if not visible_comet_available():
+        print("ERROR: Cannot reach Comet CDP on :9222.")
+        print("Run ~/bin/comet-cdp.sh first, then re-run --login.")
+        sys.exit(1)
+
+    print("Attaching to your running Comet — log into skool.com in the tab that opens, then come back here.")
     print(f"Cookies will be saved to {AUTH_FILE}\n")
 
     with sync_playwright() as p:
-        # channel="chrome" avoids Google login blocks that affect bundled Chromium
-        browser = p.chromium.launch(channel="chrome", headless=False)
-        ctx = browser.new_context()
+        browser = p.chromium.connect_over_cdp(HIS_CDP_URL)
+        ctx = browser.contexts()[0] if browser.contexts() else browser.new_context()
         page = ctx.new_page()
+        page.bring_to_front()
         page.goto(f"{BASE_URL}/login")
         page.wait_for_url(lambda url: "/login" not in url, timeout=300_000)
         print("Login detected — saving cookies...")
         ctx.storage_state(path=str(AUTH_FILE))
-        browser.close()
+        page.close()
+        # Never call browser.close() on a CDP connection to his visible Comet —
+        # that would kill his real window.
 
     print(f"Auth saved to {AUTH_FILE}")
 
@@ -707,6 +728,8 @@ async def scrape(args):
     from crawl4ai import AsyncWebCrawler, BrowserConfig
     from playwright.async_api import async_playwright
 
+    from comet_headless import headless_comet_browser_async
+
     communities = json.loads(COMMUNITIES_FILE.read_text())["communities"]
     if args.community:
         communities = [c for c in communities if c["slug"] == args.community]
@@ -723,42 +746,49 @@ async def scrape(args):
 
     state = load_state()
 
-    crawl4ai_cfg = BrowserConfig(
-        headless=True,
-        storage_state=str(AUTH_FILE),
-        enable_stealth=True,
-    )
-
     async with async_playwright() as pw:
-        # Headless scraping uses bundled Chromium with stored cookies — no channel needed
-        pw_browser = await pw.chromium.launch(headless=True)
-        pw_context = await pw_browser.new_context(storage_state=str(AUTH_FILE))
+        # ONE headless Comet backs both the raw-Playwright classroom fallback
+        # AND crawl4ai's crawler (via cdp_url below) — was two separate
+        # Chromium processes (Playwright's bundled Chromium here, crawl4ai's
+        # own bundled Chromium inside AsyncWebCrawler), and the Playwright one
+        # ran for the FULL scrape even in --posts-only mode where it was never
+        # used. That is very likely why 2026-09-07's hang showed BOTH
+        # `chrome-headless-shell` and `Google Chrome for Testing` at once.
+        async with headless_comet_browser_async(pw) as (pw_browser, handle):
+            pw_context = await pw_browser.new_context(storage_state=str(AUTH_FILE))
 
-        async with AsyncWebCrawler(config=crawl4ai_cfg) as crawler:
-            for community in communities:
-                slug = community["slug"]
-                name = community["name"]
-                print(f"\n{'='*60}")
-                print(f"Scraping: {name} ({slug})")
-                print(f"{'='*60}")
+            crawl4ai_cfg = BrowserConfig(
+                headless=True,
+                storage_state=str(AUTH_FILE),
+                enable_stealth=True,
+                use_managed_browser=True,
+                cdp_url=handle.cdp_url,
+            )
 
-                cs = community_state(state, slug)
-                slug_dir = SKOOL_DIR / slug
+            async with AsyncWebCrawler(config=crawl4ai_cfg) as crawler:
+                for community in communities:
+                    slug = community["slug"]
+                    name = community["name"]
+                    print(f"\n{'='*60}")
+                    print(f"Scraping: {name} ({slug})")
+                    print(f"{'='*60}")
 
-                if not args.posts_only and community.get("has_classroom"):
-                    await scrape_classroom(slug, name, crawler, pw_context, cs, slug_dir,
-                                           cookies_file, cookies, dl_video, dl_files)
+                    cs = community_state(state, slug)
+                    slug_dir = SKOOL_DIR / slug
 
-                if not args.classroom_only:
-                    await scrape_posts(slug, name, crawler, cs, slug_dir,
-                                       max_pages=args.max_pages,
-                                       full_history=args.full_history)
+                    if not args.posts_only and community.get("has_classroom"):
+                        await scrape_classroom(slug, name, crawler, pw_context, cs, slug_dir,
+                                               cookies_file, cookies, dl_video, dl_files)
 
-                cs["last_sync"] = datetime.now(timezone.utc).isoformat()
-                save_state(state)
+                    if not args.classroom_only:
+                        await scrape_posts(slug, name, crawler, cs, slug_dir,
+                                           max_pages=args.max_pages,
+                                           full_history=args.full_history)
 
-        await pw_context.close()
-        await pw_browser.close()
+                    cs["last_sync"] = datetime.now(timezone.utc).isoformat()
+                    save_state(state)
+
+            await pw_context.close()
 
     print(f"\nDone. Files written to {SKOOL_DIR}")
     print(f"State saved to {STATE_FILE}")
